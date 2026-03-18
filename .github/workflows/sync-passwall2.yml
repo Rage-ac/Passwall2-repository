@@ -218,7 +218,7 @@ jobs:
 
           Add to your router:
           \`\`\`
-          echo "https://rage-ac.github.io/Passwall2/packages" >> /etc/apk/repositories
+          grep -q 'rage-ac.github.io/Passwall2' /etc/apk/repositories || echo "https://rage-ac.github.io/Passwall2/packages" >> /etc/apk/repositories
           apk update
           apk add luci-app-passwall2
           \`\`\`

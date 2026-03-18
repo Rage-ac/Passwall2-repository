@@ -23,8 +23,9 @@ Add the signing key and repository — packages will be installed and updated vi
 wget -O /etc/apk/keys/passwall2-repo.rsa.pub \
   https://rage-ac.github.io/Passwall2/keys/passwall2-repo.rsa.pub
 
-# Add repository (apk automatically appends your architecture)
-echo "https://rage-ac.github.io/Passwall2/packages" >> /etc/apk/repositories
+# Add repository (only if not already added)
+grep -q 'rage-ac.github.io/Passwall2' /etc/apk/repositories || \
+  echo "https://rage-ac.github.io/Passwall2/packages" >> /etc/apk/repositories
 
 # Install
 apk update
