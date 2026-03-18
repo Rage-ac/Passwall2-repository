@@ -165,22 +165,24 @@ jobs:
           # Get upstream release notes
           BODY=$(gh api repos/Openwrt-Passwall/openwrt-passwall2/releases/latest --jq '.body // "No release notes"')
 
+          # Write release notes to a file to avoid YAML escaping issues
+          cat > /tmp/release-notes.md <<NOTES
+          ## PassWall2 ${TAG}
+
+          Automatically synced from [upstream](https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/tag/${TAG})
+
+          All packages are signed with the repository key.
+
+          ### Upstream Release Notes
+          ${BODY}
+
+          ---
+          *Auto-updated by GitHub Actions*
+          NOTES
+
           gh release create "$TAG" \
             --title "PassWall2 ${TAG}" \
-            --notes "$(cat <<EOF
-## PassWall2 ${TAG}
-
-Automatically synced from [Openwrt-Passwall/openwrt-passwall2](https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/tag/${TAG})
-
-All packages are signed with the repository key.
-
-### Upstream Release Notes
-${BODY}
-
----
-*Auto-updated by GitHub Actions*
-EOF
-          )" \
+            --notes-file /tmp/release-notes.md \
             "${ASSETS[@]}"
 
           echo "Release created: ${TAG}"
