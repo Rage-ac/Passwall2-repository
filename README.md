@@ -7,33 +7,44 @@ Auto-updated and signed APK package repository for [PassWall2](https://github.co
 GitHub Actions checks for new upstream releases every 6 hours. When a new version is detected:
 
 1. All APK packages and per-architecture ZIP archives are downloaded
-2. ZIP archives are extracted and organized by architecture
-3. All `.apk` packages are signed with the repository RSA key
-4. A new GitHub Release is created with all signed packages
+2. Packages are signed with the repository RSA key
+3. `APKINDEX.tar.gz` is generated and signed for each architecture
+4. APK repository is deployed to GitHub Pages
+5. A GitHub Release is created with per-arch ZIP archives
 
 ## Installation on Router
 
-### Step 1: Add the signing key
+### Option 1: APK Repository (recommended)
+
+Add the signing key and repository — packages will be installed and updated via `apk`:
 
 ```sh
+# Add signing key
 wget -O /etc/apk/keys/passwall2-repo.rsa.pub \
   https://rage-ac.github.io/Passwall2/keys/passwall2-repo.rsa.pub
+
+# Add repository (replace <arch> with your architecture, e.g. aarch64_generic)
+echo "https://rage-ac.github.io/Passwall2/packages/<arch>" >> /etc/apk/repositories
+
+# Install
+apk update
+apk add luci-app-passwall2
 ```
 
-### Step 2: Install packages
+### Option 2: Manual download
 
-Download `.apk` files from [Releases](../../releases/latest) for your architecture and install:
-
-```sh
-apk add luci-app-passwall2-*.apk
-```
-
-Or download the full architecture ZIP:
+Download ZIP from [Releases](../../releases/latest) for your architecture:
 
 ```sh
 wget https://github.com/Rage-ac/Passwall2/releases/latest/download/passwall2_signed_apk_aarch64_generic.zip
 unzip passwall2_signed_apk_aarch64_generic.zip
-apk add *.apk
+apk add --allow-untrusted *.apk
+```
+
+## Repository URL
+
+```
+https://rage-ac.github.io/Passwall2/packages/<arch>
 ```
 
 ## Supported architectures

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 jobs:
   check-and-update:
@@ -78,11 +79,12 @@ jobs:
             unzip -o "$zip" -d "packages/$ARCH/"
           done
 
-          # Copy standalone APK files (luci-app, luci-i18n) to a common 'all' directory
-          mkdir -p packages/all
+          # Copy standalone APK files (luci-app, luci-i18n) to each arch directory
           for apk in downloads/*.apk; do
             [ -f "$apk" ] || continue
-            cp "$apk" "packages/all/"
+            for dir in packages/*/; do
+              cp "$apk" "$dir"
+            done
           done
 
           echo "=== Package counts per arch ==="
@@ -90,59 +92,88 @@ jobs:
             echo "$(basename "$dir"): $(find "$dir" -name '*.apk' | wc -l) packages"
           done
 
-      - name: Sign APK packages
+      - name: Sign packages and generate APKINDEX
         if: steps.check.outputs.update == 'true'
         run: |
-          # Write private key from secret
           echo "${{ secrets.APK_SIGNING_KEY }}" > /tmp/passwall2-repo.rsa
           chmod 600 /tmp/passwall2-repo.rsa
 
-          # Use Alpine container with abuild-sign for correct APK signing
+          # Sign all packages and generate APKINDEX.tar.gz per arch
           docker run --rm \
             -v "$(pwd)/packages:/packages" \
             -v "/tmp/passwall2-repo.rsa:/keys/passwall2-repo.rsa:ro" \
             alpine:latest sh -c '
-              apk add --no-cache abuild > /dev/null 2>&1
-              SIGNED=0
-              FAILED=0
-              for apk in $(find /packages -name "*.apk" -type f); do
-                if abuild-sign -k /keys/passwall2-repo.rsa "$apk" 2>/dev/null; then
-                  SIGNED=$((SIGNED + 1))
-                else
-                  echo "WARNING: Failed to sign $(basename "$apk")"
-                  FAILED=$((FAILED + 1))
-                fi
+              apk add --no-cache abuild alpine-sdk > /dev/null 2>&1
+
+              for dir in /packages/*/; do
+                arch=$(basename "$dir")
+                echo "=== Processing: $arch ==="
+
+                # Sign all .apk files
+                SIGNED=0
+                for apk in "$dir"*.apk; do
+                  [ -f "$apk" ] || continue
+                  if abuild-sign -k /keys/passwall2-repo.rsa "$apk" 2>/dev/null; then
+                    SIGNED=$((SIGNED + 1))
+                  else
+                    echo "  WARNING: Failed to sign $(basename "$apk")"
+                  fi
+                done
+                echo "  Signed: $SIGNED packages"
+
+                # Generate APKINDEX.tar.gz
+                cd "$dir"
+                apk index -o APKINDEX.tar.gz *.apk 2>/dev/null
+                abuild-sign -k /keys/passwall2-repo.rsa APKINDEX.tar.gz 2>/dev/null
+                echo "  APKINDEX.tar.gz created and signed"
+                cd /
               done
-              echo "Signed: $SIGNED, Failed: $FAILED"
             '
 
           rm -f /tmp/passwall2-repo.rsa
-          echo "Signing complete"
+          echo "Signing and indexing complete"
 
-      - name: Generate repository index
+      - name: Deploy APK repository to gh-pages
         if: steps.check.outputs.update == 'true'
         run: |
           TAG="${{ steps.upstream.outputs.tag }}"
 
-          {
-            echo "# PassWall2 APK Repository"
-            echo "# Version: ${TAG}"
-            echo "# Updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            echo ""
-            echo "## Available architectures:"
-            for dir in packages/*/; do
-              arch=$(basename "$dir")
-              count=$(find "$dir" -name '*.apk' | wc -l)
-              echo "- ${arch}: ${count} packages"
-            done
-            echo ""
-            echo "## Package list:"
-            find packages -name '*.apk' -printf '%P\n' | sort
-          } > packages/INDEX.md
+          # Prepare gh-pages content
+          mkdir -p deploy/packages
+          cp -r packages/* deploy/packages/
 
-          cat packages/INDEX.md
+          # Copy public key
+          mkdir -p deploy/keys
+          cp keys/passwall2-repo.rsa.pub deploy/keys/
 
-      - name: Create release with packages
+          # Create repo info page
+          cat > deploy/packages/index.html <<'PAGEEOF'
+          <!DOCTYPE html>
+          <html><head><meta charset="UTF-8"><title>APK Repository Index</title></head>
+          <body><h1>PassWall2 APK Repository</h1><ul>
+          PAGEEOF
+
+          for dir in deploy/packages/*/; do
+            arch=$(basename "$dir")
+            echo "<li><a href=\"${arch}/\">${arch}</a></li>" >> deploy/packages/index.html
+          done
+
+          echo '</ul></body></html>' >> deploy/packages/index.html
+
+          # Deploy to gh-pages
+          cd deploy
+          git init
+          git checkout -b gh-pages
+          git add .
+          git -c user.name="github-actions" -c user.email="actions@github.com" \
+            commit -m "Update APK repository: ${TAG}"
+
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -f origin gh-pages
+
+          echo "APK repository deployed to gh-pages"
+
+      - name: Create GitHub release
         if: steps.check.outputs.update == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -151,31 +182,32 @@ jobs:
 
           ASSETS=()
 
-          # Standalone APK files (luci-app, luci-i18n) — unique names
-          for apk in packages/all/*.apk; do
-            [ -f "$apk" ] && ASSETS+=("$apk")
-          done
-
-          # Per-arch signed ZIP archives (re-pack signed packages)
+          # Per-arch signed ZIP archives
           for dir in packages/*/; do
             arch=$(basename "$dir")
-            [ "$arch" = "all" ] && continue
             zipname="passwall2_signed_apk_${arch}.zip"
             (cd "$dir" && zip -r "../../${zipname}" *.apk 2>/dev/null) && ASSETS+=("$zipname")
           done
 
           echo "Creating release ${TAG} with ${#ASSETS[@]} assets..."
 
-          # Get upstream release notes
           BODY=$(gh api repos/Openwrt-Passwall/openwrt-passwall2/releases/latest --jq '.body // "No release notes"')
 
-          # Write release notes to a file to avoid YAML escaping issues
           cat > /tmp/release-notes.md <<NOTES
           ## PassWall2 ${TAG}
 
           Automatically synced from [upstream](https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/tag/${TAG})
 
           All packages are signed with the repository key.
+
+          ### APK Repository
+
+          Add to your router:
+          \`\`\`
+          echo "https://rage-ac.github.io/Passwall2/packages/<arch>" >> /etc/apk/repositories
+          apk update
+          apk add luci-app-passwall2
+          \`\`\`
 
           ### Upstream Release Notes
           ${BODY}
