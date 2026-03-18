@@ -23,8 +23,8 @@ Add the signing key and repository — packages will be installed and updated vi
 wget -O /etc/apk/keys/passwall2-repo.rsa.pub \
   https://rage-ac.github.io/Passwall2/keys/passwall2-repo.rsa.pub
 
-# Add repository (replace <arch> with your architecture, e.g. aarch64_generic)
-echo "https://rage-ac.github.io/Passwall2/packages/<arch>" >> /etc/apk/repositories
+# Add repository (apk automatically appends your architecture)
+echo "https://rage-ac.github.io/Passwall2/packages" >> /etc/apk/repositories
 
 # Install
 apk update
@@ -44,8 +44,10 @@ apk add --allow-untrusted *.apk
 ## Repository URL
 
 ```
-https://rage-ac.github.io/Passwall2/packages/<arch>
+https://rage-ac.github.io/Passwall2/packages
 ```
+
+`apk` automatically appends your device architecture (e.g. `aarch64_cortex-a53`) to the URL.
 
 ## Supported architectures
 
