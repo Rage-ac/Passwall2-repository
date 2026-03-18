@@ -102,8 +102,9 @@ jobs:
           meson setup build -Dprefix=/usr/local -Dlua=disabled -Ddocs=disabled
           ninja -C build
           sudo ninja -C build install
+          sudo ldconfig
           echo "apk-tools built:"
-          /usr/local/bin/apk --version
+          apk --version
 
       - name: Sign packages and generate APKINDEX
         if: steps.check.outputs.update == 'true'
