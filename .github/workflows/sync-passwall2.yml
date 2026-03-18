@@ -10,10 +10,18 @@ on:
 permissions:
   contents: write
   pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   check-and-update:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - name: Checkout repository
@@ -80,23 +88,20 @@ jobs:
           done
 
           # noarch directory: standalone APK files (luci-app, luci-i18n)
-          # apk fetches noarch packages from <repo>/noarch/
           mkdir -p packages/noarch
           for apk in downloads/*.apk; do
             [ -f "$apk" ] || continue
             cp "$apk" "packages/noarch/"
           done
 
-          # Also copy standalone APKs into each arch directory
-          # AND copy all arch-specific packages into noarch (some deps may resolve there)
+          # Copy standalone APKs into each arch directory
+          # Copy arch-specific packages into noarch (deps may resolve there)
           for dir in packages/*/; do
             [ "$(basename "$dir")" = "noarch" ] && continue
-            # Add standalone apks to arch dirs
             for apk in downloads/*.apk; do
               [ -f "$apk" ] || continue
               cp "$apk" "$dir"
             done
-            # Add arch-specific packages to noarch
             for apk in "$dir"*.apk; do
               [ -f "$apk" ] || continue
               cp -n "$apk" "packages/noarch/" 2>/dev/null
@@ -133,7 +138,6 @@ jobs:
             echo "=== Processing: $arch ==="
             cd "$dir"
 
-            # Generate APKINDEX with apk-tools v3 (--allow-untrusted for upstream-signed packages)
             echo "  Generating APKINDEX..."
             /usr/local/bin/apk mkndx \
               --allow-untrusted \
@@ -152,12 +156,11 @@ jobs:
           echo "=== Verification ==="
           find packages -name "APKINDEX.tar.gz" -exec ls -la {} \;
 
-      - name: Deploy APK repository to gh-pages
+      - name: Prepare Pages artifact
         if: steps.check.outputs.update == 'true'
         run: |
           TAG="${{ steps.upstream.outputs.tag }}"
 
-          # Verify APKINDEX files before deploy
           INDEX_COUNT=$(find packages -name "APKINDEX.tar.gz" | wc -l)
           echo "Found $INDEX_COUNT APKINDEX.tar.gz files"
           if [ "$INDEX_COUNT" -eq 0 ]; then
@@ -165,40 +168,26 @@ jobs:
             exit 1
           fi
 
-          # Prepare gh-pages content
-          mkdir -p deploy/packages
-          cp -r packages/* deploy/packages/
+          mkdir -p _site/packages
+          cp -r packages/* _site/packages/
 
           # Copy public key
-          mkdir -p deploy/keys
-          cp keys/passwall2-repo.rsa.pub deploy/keys/
+          mkdir -p _site/keys
+          cp keys/passwall2-repo.rsa.pub _site/keys/
 
-          # Create repo info page
-          cat > deploy/packages/index.html <<'PAGEEOF'
-          <!DOCTYPE html>
-          <html><head><meta charset="UTF-8"><title>APK Repository Index</title></head>
-          <body><h1>PassWall2 APK Repository</h1><ul>
-          PAGEEOF
+          echo "=== Site structure ==="
+          du -sh _site/
+          find _site -name "APKINDEX.tar.gz" | wc -l
+          ls _site/packages/
 
-          for dir in deploy/packages/*/; do
-            arch=$(basename "$dir")
-            echo "<li><a href=\"${arch}/\">${arch}</a></li>" >> deploy/packages/index.html
-          done
+      - name: Upload Pages artifact
+        if: steps.check.outputs.update == 'true'
+        uses: actions/upload-pages-artifact@v3
 
-          echo '</ul></body></html>' >> deploy/packages/index.html
-
-          # Deploy to gh-pages
-          cd deploy
-          git init
-          git checkout -b gh-pages
-          git add .
-          git -c user.name="github-actions" -c user.email="actions@github.com" \
-            commit -m "Update APK repository: ${TAG}"
-
-          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git push -f origin gh-pages
-
-          echo "APK repository deployed to gh-pages"
+      - name: Deploy to GitHub Pages
+        if: steps.check.outputs.update == 'true'
+        id: deploy
+        uses: actions/deploy-pages@v4
 
       - name: Create GitHub release
         if: steps.check.outputs.update == 'true'
