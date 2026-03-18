@@ -98,43 +98,39 @@ jobs:
           echo "${{ secrets.APK_SIGNING_KEY }}" > /tmp/passwall2-repo.rsa
           chmod 600 /tmp/passwall2-repo.rsa
 
+          # Use OpenWrt SDK container (apk-tools v3 compatible)
           docker run --rm \
             -v "$(pwd)/packages:/packages" \
             -v "/tmp/passwall2-repo.rsa:/keys/passwall2-repo.rsa:ro" \
-            alpine:latest sh -c '
+            openwrt/sdk:aarch64_cortex-a53-24.10.0 bash -c '
               set -e
-              apk add --no-cache abuild alpine-sdk
 
               for dir in /packages/*/; do
                 arch=$(basename "$dir")
                 echo "=== Processing: $arch ==="
-
-                # Sign all .apk files
-                SIGNED=0
-                for f in "$dir"*.apk; do
-                  [ -f "$f" ] || continue
-                  abuild-sign -k /keys/passwall2-repo.rsa "$f" && SIGNED=$((SIGNED + 1)) || echo "  WARN: failed to sign $(basename "$f")"
-                done
-                echo "  Signed: $SIGNED packages"
-
-                # Generate APKINDEX.tar.gz
                 cd "$dir"
+
+                # Generate and sign APKINDEX
                 echo "  Generating APKINDEX..."
-                apk index --output APKINDEX.tar.gz *.apk
-                echo "  APKINDEX size: $(stat -c%s APKINDEX.tar.gz) bytes"
-                abuild-sign -k /keys/passwall2-repo.rsa APKINDEX.tar.gz
-                echo "  APKINDEX.tar.gz created and signed"
+                apk mkndx --output APKINDEX.tar.gz \
+                  --sign /keys/passwall2-repo.rsa \
+                  --description "PassWall2 packages for $arch" \
+                  *.apk && echo "  APKINDEX.tar.gz created" || {
+                    echo "  Trying apk index fallback..."
+                    apk index --output APKINDEX.tar.gz *.apk
+                    echo "  APKINDEX.tar.gz created (unsigned)"
+                  }
+
                 ls -la APKINDEX.tar.gz
                 cd /
               done
 
-              echo "=== Verify APKINDEX files ==="
+              echo "=== Verify ==="
               find /packages -name "APKINDEX.tar.gz" -exec ls -la {} \;
             '
 
           rm -f /tmp/passwall2-repo.rsa
 
-          # Verify APKINDEX files exist locally
           echo "=== Local verification ==="
           find packages -name "APKINDEX.tar.gz" -exec ls -la {} \;
 
