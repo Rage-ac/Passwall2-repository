@@ -71,31 +71,33 @@ jobs:
 
           need_update=0
 
-          upstream_count=$(echo "$upstream_json" | jq '.assets | length')
-          if [ "$upstream_count" -eq 0 ]; then
-            echo "No upstream assets to compare; falling back to tag check"
-            if [ "$upstream_tag" != "$current_tag" ]; then
-              echo "update=true" >> "$GITHUB_OUTPUT"
-              echo "Tag changed: $upstream_tag"
-              exit 0
-            else
-              echo "update=false" >> "$GITHUB_OUTPUT"
-              echo "Already up to date"
-              exit 0
-            fi
-          fi
-
-          current_count=$(echo "$current_json" | jq '.assets | length')
-          echo "Upstream assets: $upstream_count, Current assets: $current_count"
-
-          # If asset count differs, trigger update (covers additions or deletions upstream)
-          if [ "$upstream_count" -ne "$current_count" ]; then
-            echo "Asset count changed: upstream $upstream_count vs current $current_count"
+          # 1) Simple check: tag change -> update
+          if [ "$upstream_tag" != "$current_tag" ]; then
+            echo "Tag changed: $upstream_tag (was $current_tag); will update"
             echo "update=true" >> "$GITHUB_OUTPUT"
-            echo "Asset count changed; will update"
             exit 0
           fi
 
+          # 2) Asset count change -> update
+          upstream_count=$(echo "$upstream_json" | jq '.assets | length // 0')
+          current_count=$(echo "$current_json" | jq '.assets | length // 0')
+          echo "Upstream assets: $upstream_count, Current assets: $current_count"
+
+          if [ "$upstream_count" -ne "$current_count" ]; then
+            echo "Asset count changed: upstream $upstream_count vs current $current_count; will update"
+            echo "update=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # If no assets to compare, nothing more to do
+          if [ "$upstream_count" -eq 0 ]; then
+            echo "No upstream assets and tags are equal; nothing to update"
+            echo "update=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date"
+            exit 0
+          fi
+
+          # 3) Content comparison (size/updated_at -> sha256)
           for i in $(seq 0 $((upstream_count - 1))); do
             name=$(echo "$upstream_json" | jq -r ".assets[$i].name")
             size=$(echo "$upstream_json" | jq -r ".assets[$i].size")
@@ -104,7 +106,7 @@ jobs:
 
             match_index=$(echo "$current_json" | jq -r --arg name "$name" '(.assets | map(.name == $name) | index(true)) // -1')
             if [ "$match_index" -lt 0 ]; then
-              echo "Missing asset in current release: $name"
+              echo "Asset $name missing in current release (names differ despite equal count); will update"
               need_update=1
               break
             fi
@@ -122,14 +124,14 @@ jobs:
               cur_hash=$(sha256sum "$tmp_dir/current_$i" | awk '{print $1}')
               rm -rf "$tmp_dir"
               if [ "$up_hash" != "$cur_hash" ]; then
-                echo "Asset $name content differs (sha256 mismatch)"
+                echo "Asset $name content differs (sha256 mismatch); will update"
                 need_update=1
                 break
               fi
             fi
           done
 
-          if [ "$need_update" -eq 1 ] || [ "$upstream_tag" != "$current_tag" ]; then
+          if [ "$need_update" -eq 1 ]; then
             echo "update=true" >> "$GITHUB_OUTPUT"
             echo "New or modified release assets detected: $upstream_tag"
           else
