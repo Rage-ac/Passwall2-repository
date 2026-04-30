@@ -88,6 +88,14 @@ jobs:
           current_count=$(echo "$current_json" | jq '.assets | length')
           echo "Upstream assets: $upstream_count, Current assets: $current_count"
 
+          # If asset count differs, trigger update (covers additions or deletions upstream)
+          if [ "$upstream_count" -ne "$current_count" ]; then
+            echo "Asset count changed: upstream $upstream_count vs current $current_count"
+            echo "update=true" >> "$GITHUB_OUTPUT"
+            echo "Asset count changed; will update"
+            exit 0
+          fi
+
           for i in $(seq 0 $((upstream_count - 1))); do
             name=$(echo "$upstream_json" | jq -r ".assets[$i].name")
             size=$(echo "$upstream_json" | jq -r ".assets[$i].size")
