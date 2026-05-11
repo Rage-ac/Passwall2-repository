@@ -48,13 +48,95 @@ jobs:
 
       - name: Check if update needed
         id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ steps.upstream.outputs.tag }}" = "${{ steps.current.outputs.tag }}" ]; then
+          set -euo pipefail
+
+          # Fetch upstream and current release metadata
+          upstream_json=$(gh api repos/Openwrt-Passwall/openwrt-passwall2/releases/latest)
+          upstream_tag=$(echo "$upstream_json" | jq -r '.tag_name')
+          current_json=$(gh api repos/${{ github.repository }}/releases/latest 2>/dev/null || echo '{}')
+          current_tag=$(echo "$current_json" | jq -r '.tag_name // "none"')
+
+          echo "Upstream tag: $upstream_tag"
+          echo "Current tag: $current_tag"
+
+          # If we have no current release, update
+          if [ "$current_tag" = "none" ]; then
+            echo "update=true" >> "$GITHUB_OUTPUT"
+            echo "No current release present; will update"
+            exit 0
+          fi
+
+          need_update=0
+
+          # 1) Simple check: tag change -> update
+          if [ "$upstream_tag" != "$current_tag" ]; then
+            echo "Tag changed: $upstream_tag (was $current_tag); will update"
+            echo "update=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 2) Asset count change -> update
+          upstream_count=$(echo "$upstream_json" | jq '.assets | length // 0')
+          current_count=$(echo "$current_json" | jq '.assets | length // 0')
+          echo "Upstream assets: $upstream_count, Current assets: $current_count"
+
+          if [ "$upstream_count" -ne "$current_count" ]; then
+            echo "Asset count changed: upstream $upstream_count vs current $current_count; will update"
+            echo "update=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # If no assets to compare, nothing more to do
+          if [ "$upstream_count" -eq 0 ]; then
+            echo "No upstream assets and tags are equal; nothing to update"
             echo "update=false" >> "$GITHUB_OUTPUT"
             echo "Already up to date"
-          else
+            exit 0
+          fi
+
+          # 3) Content comparison (size/updated_at -> sha256)
+          for i in $(seq 0 $((upstream_count - 1))); do
+            name=$(echo "$upstream_json" | jq -r ".assets[$i].name")
+            size=$(echo "$upstream_json" | jq -r ".assets[$i].size")
+            updated_at=$(echo "$upstream_json" | jq -r ".assets[$i].updated_at")
+            download_url=$(echo "$upstream_json" | jq -r ".assets[$i].browser_download_url")
+
+            match_index=$(echo "$current_json" | jq -r --arg name "$name" '(.assets | map(.name == $name) | index(true)) // -1')
+            if [ "$match_index" -lt 0 ]; then
+              echo "Asset $name missing in current release (names differ despite equal count); will update"
+              need_update=1
+              break
+            fi
+
+            curr_size=$(echo "$current_json" | jq -r ".assets[$match_index].size")
+            curr_updated_at=$(echo "$current_json" | jq -r ".assets[$match_index].updated_at")
+            curr_download_url=$(echo "$current_json" | jq -r ".assets[$match_index].browser_download_url")
+
+            if [ "$size" != "$curr_size" ] || [ "$updated_at" != "$curr_updated_at" ]; then
+              echo "Asset $name differs by size/date; verifying by hash"
+              tmp_dir=$(mktemp -d)
+              curl -fsSL -H "Authorization: token $GH_TOKEN" -o "$tmp_dir/upstream_$i" "$download_url"
+              curl -fsSL -H "Authorization: token $GH_TOKEN" -o "$tmp_dir/current_$i" "$curr_download_url"
+              up_hash=$(sha256sum "$tmp_dir/upstream_$i" | awk '{print $1}')
+              cur_hash=$(sha256sum "$tmp_dir/current_$i" | awk '{print $1}')
+              rm -rf "$tmp_dir"
+              if [ "$up_hash" != "$cur_hash" ]; then
+                echo "Asset $name content differs (sha256 mismatch); will update"
+                need_update=1
+                break
+              fi
+            fi
+          done
+
+          if [ "$need_update" -eq 1 ]; then
             echo "update=true" >> "$GITHUB_OUTPUT"
-            echo "New release available: ${{ steps.upstream.outputs.tag }}"
+            echo "New or modified release assets detected: $upstream_tag"
+          else
+            echo "update=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date"
           fi
 
       - name: Download upstream release assets
