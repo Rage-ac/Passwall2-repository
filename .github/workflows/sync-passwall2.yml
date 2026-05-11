@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get upstream latest release
         id: upstream
@@ -223,12 +223,12 @@ jobs:
 
       - name: Upload Pages artifact
         if: steps.check.outputs.update == 'true'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
 
       - name: Deploy to GitHub Pages
         if: steps.check.outputs.update == 'true'
         id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
       - name: Create GitHub release
         if: steps.check.outputs.update == 'true'
