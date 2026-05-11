@@ -78,66 +78,25 @@ jobs:
             exit 0
           fi
 
-          # 2) Asset count change -> update
-          upstream_count=$(echo "$upstream_json" | jq '.assets | length // 0')
-          current_count=$(echo "$current_json" | jq '.assets | length // 0')
-          echo "Upstream assets: $upstream_count, Current assets: $current_count"
+          # 2) Per-arch asset count check
+          # Upstream ships one passwall_packages_apk_<arch>.zip per architecture.
+          # Our release ships one passwall2_signed_apk_<arch>.zip per architecture, plus a synthesized _noarch.zip.
+          # Counts should match when our build is complete; a mismatch means upstream added arches OR our previous build was defective.
+          upstream_arch_count=$(echo "$upstream_json" \
+            | jq '[.assets[] | select((.name | startswith("passwall_packages_apk_")) and (.name | endswith(".zip")))] | length')
+          current_arch_count=$(echo "$current_json" \
+            | jq '[.assets[] | select((.name | startswith("passwall2_signed_apk_")) and (.name | endswith(".zip")) and ((.name | endswith("_noarch.zip")) | not))] | length')
 
-          if [ "$upstream_count" -ne "$current_count" ]; then
-            echo "Asset count changed: upstream $upstream_count vs current $current_count; will update"
+          echo "Upstream per-arch zips: $upstream_arch_count, Current per-arch signed zips: $current_arch_count"
+
+          if [ "$upstream_arch_count" -ne "$current_arch_count" ]; then
+            echo "Per-arch zip count differs; will update"
             echo "update=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # If no assets to compare, nothing more to do
-          if [ "$upstream_count" -eq 0 ]; then
-            echo "No upstream assets and tags are equal; nothing to update"
-            echo "update=false" >> "$GITHUB_OUTPUT"
-            echo "Already up to date"
-            exit 0
-          fi
-
-          # 3) Content comparison (size/updated_at -> sha256)
-          for i in $(seq 0 $((upstream_count - 1))); do
-            name=$(echo "$upstream_json" | jq -r ".assets[$i].name")
-            size=$(echo "$upstream_json" | jq -r ".assets[$i].size")
-            updated_at=$(echo "$upstream_json" | jq -r ".assets[$i].updated_at")
-            download_url=$(echo "$upstream_json" | jq -r ".assets[$i].browser_download_url")
-
-            match_index=$(echo "$current_json" | jq -r --arg name "$name" '(.assets | map(.name == $name) | index(true)) // -1')
-            if [ "$match_index" -lt 0 ]; then
-              echo "Asset $name missing in current release (names differ despite equal count); will update"
-              need_update=1
-              break
-            fi
-
-            curr_size=$(echo "$current_json" | jq -r ".assets[$match_index].size")
-            curr_updated_at=$(echo "$current_json" | jq -r ".assets[$match_index].updated_at")
-            curr_download_url=$(echo "$current_json" | jq -r ".assets[$match_index].browser_download_url")
-
-            if [ "$size" != "$curr_size" ] || [ "$updated_at" != "$curr_updated_at" ]; then
-              echo "Asset $name differs by size/date; verifying by hash"
-              tmp_dir=$(mktemp -d)
-              curl -fsSL -H "Authorization: token $GH_TOKEN" -o "$tmp_dir/upstream_$i" "$download_url"
-              curl -fsSL -H "Authorization: token $GH_TOKEN" -o "$tmp_dir/current_$i" "$curr_download_url"
-              up_hash=$(sha256sum "$tmp_dir/upstream_$i" | awk '{print $1}')
-              cur_hash=$(sha256sum "$tmp_dir/current_$i" | awk '{print $1}')
-              rm -rf "$tmp_dir"
-              if [ "$up_hash" != "$cur_hash" ]; then
-                echo "Asset $name content differs (sha256 mismatch); will update"
-                need_update=1
-                break
-              fi
-            fi
-          done
-
-          if [ "$need_update" -eq 1 ]; then
-            echo "update=true" >> "$GITHUB_OUTPUT"
-            echo "New or modified release assets detected: $upstream_tag"
-          else
-            echo "update=false" >> "$GITHUB_OUTPUT"
-            echo "Already up to date"
-          fi
+          echo "update=false" >> "$GITHUB_OUTPUT"
+          echo "Already up to date"
 
       - name: Download upstream release assets
         if: steps.check.outputs.update == 'true'
@@ -313,6 +272,13 @@ jobs:
           ---
           *Auto-updated by GitHub Actions*
           NOTES
+
+          # If a release with this tag already exists (defective build, manual rerun, etc.),
+          # delete it first — gh release create cannot overwrite.
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; deleting before recreating"
+            gh release delete "$TAG" --yes --cleanup-tag --repo "${{ github.repository }}"
+          fi
 
           gh release create "$TAG" \
             --title "PassWall2 ${TAG}" \
